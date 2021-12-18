@@ -19,6 +19,7 @@ import org.kie.api.io.Resource;
 import org.kie.api.io.ResourceType;
 import org.kie.api.runtime.KieContainer;
 import org.kie.api.runtime.KieSession;
+import org.kie.api.runtime.StatelessKieSession;
 import org.kie.internal.io.ResourceFactory;
 import org.kie.internal.utils.KieHelper;
 import org.springframework.beans.factory.BeanClassLoaderAware;
@@ -86,6 +87,19 @@ public class KieTemplate extends KieAccessor implements BeanClassLoaderAware {
             ds.add(CACHE_RULE.get(name));
         }
         return decodeToSession(ds.toArray(new String[]{}));
+    }
+
+    public StatelessKieSession getStatelessKieSession(String... fileName) {
+        List<String> ds = new ArrayList<>();
+        for (String name : fileName) {
+            String content = CACHE_RULE.get(name);
+            if (StringUtils.isBlank(content)) {
+                ds = doReadTemp(fileName);
+                return decodeToStatelessSession(ds.toArray(new String[]{}));
+            }
+            ds.add(CACHE_RULE.get(name));
+        }
+        return decodeToStatelessSession(ds.toArray(new String[]{}));
     }
 
     /**
@@ -202,6 +216,46 @@ public class KieTemplate extends KieAccessor implements BeanClassLoaderAware {
     }
 
     /**
+     * 把字符串解析成KieSession
+     * @param drl   规则文件字符串
+     * @return  KieSession
+     */
+    public StatelessKieSession decodeToStatelessSession(String... drl) {
+        KieHelper kieHelper = new KieHelper();
+        for (String s : drl) {
+            kieHelper.addContent(s, ResourceType.DRL);
+        }
+
+        if (getVerify() != null && LISTENER_OPEN.equalsIgnoreCase(getVerify())) {
+            Results results = kieHelper.verify();
+            if (results.hasMessages(Message.Level.WARNING, Message.Level.ERROR)) {
+                List<Message> messages = results.getMessages(Message.Level.WARNING, Message.Level.ERROR);
+                for (Message message : messages) {
+                    logger.error("Error: {}", message.getText());
+                }
+                throw new IllegalStateException("Compilation errors.");
+            }
+
+        }
+
+        KieBaseConfiguration config = kieHelper.ks.newKieBaseConfiguration();
+
+        if (EventProcessingOption.STREAM.getMode().equalsIgnoreCase(getMode())) {
+            config.setOption(EventProcessingOption.STREAM);
+        } else {
+            config.setOption(EventProcessingOption.CLOUD);
+        }
+        KieBase kieBase = kieHelper.build(config);
+        StatelessKieSession kieSession = kieBase.newStatelessKieSession();
+        if (getListener() == null || !LISTENER_CLOSE.equalsIgnoreCase(getListener())) {
+            kieSession.addEventListener(new DefaultRuleRuntimeEventListener());
+            kieSession.addEventListener(new DefaultAgendaEventListener());
+            kieSession.addEventListener(new DefaultProcessEventListener());
+        }
+        return kieSession;
+    }
+
+    /**
      * 获取绝对路径下的规则文件对应的KieBase
      * @param classPath     绝对路径/文件目录
      * @return KieBase
@@ -266,6 +320,5 @@ public class KieTemplate extends KieAccessor implements BeanClassLoaderAware {
         }
         return ds;
     }
-
 
 }
